@@ -1,5 +1,6 @@
 #include<stdio.h>
 #include<stdlib.h>
+#include<math.h>
 
 /* hash.h */
 typedef struct hash {
@@ -20,6 +21,29 @@ int hash_key(Hash *H, int id);
 struct topic **hash_to_a(Hash *H);
 void hash_free(Hash *H);
 
+/* heap.h */
+#define SIZE_T_MAX (size_t)(-1)
+#define INITIAL_SIZE 100
+
+typedef struct h_node {
+  double key;
+  struct topic *val;
+} HNode;
+
+typedef struct heap {
+  int size;
+  int capacity;
+  HNode **arr;
+} Heap;
+
+Heap* new_heap();
+void heap_insert(Heap *H, double key, struct topic *val);
+void extract_max(Heap *H, double *key, struct topic **val);
+void heap_bubble_up(Heap *H, int pos);
+void heap_bubble_down(Heap *H, int pos);
+void heap_free(Heap *H);
+void grow_heap(Heap *H);
+
 /* kdtree.h */
 typedef struct kd_tree {
   struct topic *val;
@@ -30,6 +54,8 @@ typedef struct kd_tree {
 } KDTree;
 
 KDTree *kdtree(struct topic **topics, int depth, int size);
+void kdtree_nearest(struct kd_tree *T, double x, double y, int n, int depth,
+    struct heap *topics);
 int compare_topics_x(const void *a, const void *b);
 int compare_topics_y(const void *a, const void *b);
 void kdtree_free(KDTree *T);
@@ -125,6 +151,34 @@ int main(int argc, char *argv[])
 
 void print_nearest_topics(KDTree *T, double x, double y, int n_results)
 {
+  Heap *topics = new_heap();
+  int i, size = 0;
+  double dist;
+  Topic *topic;
+  Topic **sorted;
+
+  kdtree_nearest(T, x, y, n_results, 0, topics);
+  size = topics->size;
+
+  printf("got size: %d\n", size);
+
+  sorted = malloc(size * sizeof(Topic *));
+
+  /* Reverse the order of the heap */
+  for(i=size-1; i>=0; i--) {
+    extract_max(topics, &dist, &topic);
+    sorted[i] = topic;
+  }
+
+  /* Print the array */
+  for(i=0; i<size; i++) {
+    printf("%d", sorted[i]->id);
+    if(i < size-1) printf(" ");
+  }
+
+  printf("\n");
+
+  heap_free(topics);
 }
 
 void print_nearest_questions(KDTree *T, double x, double y, int n_results)
@@ -152,6 +206,77 @@ KDTree *kdtree(Topic **topics, int depth, int size)
   node->rchild = kdtree(topics+median+1, depth+1, size-(median+1));
 
   return node;
+}
+
+void kdtree_nearest(KDTree *T, double x, double y, int n, int depth,
+    Heap *topics)
+{
+  int axis;
+  double d, dist, cur_max;
+  double a, b;
+  Topic *topic;
+
+  axis = depth % 2;
+  dist = pow(T->x - x, 2) + pow(T->y - y, 2);
+
+  printf("Looking at node: %d (%lf, %lf)\n", T->val->id, T->x, T->y);
+  printf("dist: %lf\n", dist);
+
+  if(T->lchild == NULL) {
+    if(topics->size < n) {
+      heap_insert(topics, dist, T->val);
+    }
+    else {
+      extract_max(topics, &cur_max, &topic);
+
+      if(dist < cur_max) {
+        heap_insert(topics, dist, T->val);
+        cur_max = dist;
+      }
+      else {
+        heap_insert(topics, cur_max, topic);
+      }
+    }
+
+    return;
+  }
+
+  if(axis == 0) {
+    a = x; b = T->x;
+  }
+  else {
+    a = y; b = T->y;
+  }
+
+  /* Follow tree down in appropriate direction */
+  if(a <= b)
+    kdtree_nearest(T->lchild, x, y, n, depth+1, topics);
+  else
+    kdtree_nearest(T->rchild, x, y, n, depth+1, topics);
+
+  /* Add or swap out a value in the heap, if necessary */
+  if(topics->size < n) {
+    heap_insert(topics, dist, T->val);
+  }
+  else {
+    extract_max(topics, &cur_max, &topic);
+
+    if(dist < cur_max) {
+      heap_insert(topics, dist, T->val);
+      cur_max = dist;
+    }
+    else {
+      heap_insert(topics, cur_max, topic);
+    }
+  }
+
+  /* If there might be a point closer than our current max on the other side */
+  if(pow(abs(a-b), 2) < cur_max) {
+    if(a <= b)
+      kdtree_nearest(T->rchild, x, y, n, depth+1, topics);
+    else
+      kdtree_nearest(T->lchild, x, y, n, depth+1, topics);
+  }
 }
 
 int compare_topics_x(const void *a, const void *b)
@@ -245,6 +370,7 @@ Topic **hash_to_a(Hash *H)
 
 int hash_key(Hash *H, int id)
 {
+  /* bootleg, but for our purposes it should do an adequate job */
   return id % H->size;
 }
 
@@ -252,4 +378,147 @@ void hash_free(Hash *H)
 {
   free(H->arr);
   free(H);
+}
+
+/* heap.c */
+Heap* new_heap()
+{
+  Heap* H = malloc(sizeof(Heap));
+  H->size = 0;
+  H->capacity = INITIAL_SIZE;
+  H->arr = malloc(sizeof(HNode*) * INITIAL_SIZE);
+  return H;
+}
+
+void heap_insert(Heap *H, double key, Topic *val)
+{
+  int parent;
+  int pos = H->size;
+
+  /* Make sure the heap has space to hold the new value */
+  grow_heap(H);
+
+  H->arr[pos] = malloc(sizeof(HNode));
+  H->arr[pos]->key = 0-key;
+  H->arr[pos]->val = val;
+  H->size++;
+
+  heap_bubble_up(H, pos);
+}
+
+void extract_max(Heap *H, double *key, Topic **val)
+{
+  if(H->size > 0) {
+    *key = 0-H->arr[0]->key;
+    *val = H->arr[0]->val;
+
+    H->arr[0] = H->arr[H->size-1];
+    H->size--;
+    heap_bubble_down(H, 0);
+
+    return;
+  }
+  else {
+    fputs("Heap empty; can't extract min\n", stderr);
+    return;
+  }
+}
+
+void heap_bubble_up(Heap *H, int pos)
+{
+  int parent;
+  HNode *tmp;
+  HNode **arr = H->arr;
+
+  if(pos % 2 == 0)
+    parent = (pos+1)/2;
+  else
+    parent = pos/2;
+
+  /* bubble up */
+  while(arr[parent]->key > arr[pos]->key) {
+    tmp = arr[parent];
+    arr[parent] = arr[pos];
+    arr[pos] = tmp;
+
+    pos = parent;
+
+    if(pos % 2 == 0)
+      parent = (pos+1)/2;
+    else
+      parent = pos/2;
+  }
+}
+
+void heap_bubble_down(Heap *H, int pos)
+{
+  int child, l_child, r_child, swap;
+  HNode *tmp;
+  HNode **arr = H->arr;
+
+  if(pos == 0) {
+    l_child = 1;
+    r_child = 2;
+  }
+  else {
+    l_child = pos*2;
+    r_child = pos*2+1;
+  }
+
+  /* bubble down */
+  while(1) {
+    if(r_child >= H->size) {
+      if(l_child >= H->size)
+        break;
+      else
+        swap = l_child;
+    }
+    else {
+      if(arr[l_child]->key < arr[r_child]->key)
+        swap = l_child;
+      else
+        swap = r_child;
+    }
+
+    if(arr[pos]->key > arr[swap]->key) {
+      tmp = arr[pos];
+      arr[pos] = arr[swap];
+      arr[swap] = tmp;
+
+      pos = swap;
+      l_child = pos*2;
+      r_child = pos*2+1;
+    }
+    else {
+      break;
+    }
+  }
+}
+
+void heap_free(Heap *H)
+{
+  free(H->arr);
+  free(H);
+}
+
+void grow_heap(Heap *H)
+{
+  if(H->size == H->capacity) {
+    int new_capacity = H->capacity * 2;
+
+    if(new_capacity < SIZE_T_MAX/sizeof(int)) {
+      HNode **new_array = realloc(H->arr, new_capacity*sizeof(HNode*));
+
+      if(new_array != NULL) {
+        H->arr = new_array;
+        H->capacity = new_capacity;
+      }
+      else {
+        fputs("Error: out of memory", stderr);
+      }
+    }
+    else {
+      fputs("Error: overflow\n", stderr);
+    }
+  }
 }
