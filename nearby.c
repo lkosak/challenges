@@ -43,6 +43,8 @@ void heap_bubble_up(Heap *H, int pos);
 void heap_bubble_down(Heap *H, int pos);
 void heap_free(Heap *H);
 void grow_heap(Heap *H);
+int heap_less(struct h_node *a, struct h_node *b);
+int heap_greater(struct h_node *a, struct h_node *b);
 
 /* kdtree.h */
 typedef struct kd_tree {
@@ -160,8 +162,6 @@ void print_nearest_topics(KDTree *T, double x, double y, int n_results)
   kdtree_nearest(T, x, y, n_results, 0, topics);
   size = topics->size;
 
-  printf("got size: %d\n", size);
-
   sorted = malloc(size * sizeof(Topic *));
 
   /* Reverse the order of the heap */
@@ -194,52 +194,59 @@ KDTree *kdtree(Topic **topics, int depth, int size)
   int axis = depth % 2;
   KDTree *node = malloc(sizeof(KDTree));
 
-  if(depth == 0)
+  if(axis == 0)
     qsort(topics, size, sizeof(Topic *), compare_topics_x);
   else
     qsort(topics, size, sizeof(Topic *), compare_topics_y);
 
-  median = size / 2;
+  median = (size-1) / 2;
 
   node->val = topics[median];
+  node->x = node->val->x;
+  node->y = node->val->y;
   node->lchild = kdtree(topics, depth+1, median);
   node->rchild = kdtree(topics+median+1, depth+1, size-(median+1));
 
   return node;
 }
 
+int compare_topics_x(const void *a, const void *b)
+{
+  const struct topic *topic_a = (*(Topic **)a);
+  const struct topic *topic_b = (*(Topic **)b);
+
+  if(topic_a->x < topic_b->x)
+    return -1;
+  else if(topic_a->x > topic_b->x)
+    return 1;
+  else
+    return 0;
+}
+
+int compare_topics_y(const void *a, const void *b)
+{
+  const struct topic *topic_a = a;
+  const struct topic *topic_b = b;
+
+  if(topic_a->y < topic_b->y)
+    return -1;
+  else if(topic_a->y > topic_b->y)
+    return 1;
+  else
+    return 0;
+}
+
 void kdtree_nearest(KDTree *T, double x, double y, int n, int depth,
     Heap *topics)
 {
-  int axis;
-  double d, dist, cur_max;
+  if(T == NULL)
+    return;
+
+  double d, cur_max;
   double a, b;
   Topic *topic;
-
-  axis = depth % 2;
-  dist = pow(T->x - x, 2) + pow(T->y - y, 2);
-
-  printf("Looking at node: %d (%lf, %lf)\n", T->val->id, T->x, T->y);
-  printf("dist: %lf\n", dist);
-
-  if(T->lchild == NULL) {
-    if(topics->size < n) {
-      heap_insert(topics, dist, T->val);
-    }
-    else {
-      extract_max(topics, &cur_max, &topic);
-
-      if(dist < cur_max) {
-        heap_insert(topics, dist, T->val);
-        cur_max = dist;
-      }
-      else {
-        heap_insert(topics, cur_max, topic);
-      }
-    }
-
-    return;
-  }
+  int axis = depth % 2;
+  double dist = pow(T->x - x, 2) + pow(T->y - y, 2);
 
   if(axis == 0) {
     a = x; b = T->x;
@@ -271,26 +278,12 @@ void kdtree_nearest(KDTree *T, double x, double y, int n, int depth,
   }
 
   /* If there might be a point closer than our current max on the other side */
-  if(pow(abs(a-b), 2) < cur_max) {
+  if(topics->size < n || pow(a-b, 2) < cur_max) {
     if(a <= b)
       kdtree_nearest(T->rchild, x, y, n, depth+1, topics);
     else
       kdtree_nearest(T->lchild, x, y, n, depth+1, topics);
   }
-}
-
-int compare_topics_x(const void *a, const void *b)
-{
-  const struct topic *topic_a = a;
-  const struct topic *topic_b = b;
-  return topic_a->x - topic_b->x;
-}
-
-int compare_topics_y(const void *a, const void *b)
-{
-  const struct topic *topic_a = a;
-  const struct topic *topic_b = b;
-  return topic_a->y - topic_b->y;
 }
 
 void kdtree_free(KDTree *T)
@@ -436,7 +429,7 @@ void heap_bubble_up(Heap *H, int pos)
     parent = pos/2;
 
   /* bubble up */
-  while(arr[parent]->key > arr[pos]->key) {
+  while(heap_greater(arr[parent], arr[pos])) {
     tmp = arr[parent];
     arr[parent] = arr[pos];
     arr[pos] = tmp;
@@ -474,13 +467,13 @@ void heap_bubble_down(Heap *H, int pos)
         swap = l_child;
     }
     else {
-      if(arr[l_child]->key < arr[r_child]->key)
+      if(heap_less(arr[l_child], arr[r_child]))
         swap = l_child;
       else
         swap = r_child;
     }
 
-    if(arr[pos]->key > arr[swap]->key) {
+    if(heap_greater(arr[pos], arr[swap])) {
       tmp = arr[pos];
       arr[pos] = arr[swap];
       arr[swap] = tmp;
@@ -493,6 +486,28 @@ void heap_bubble_down(Heap *H, int pos)
       break;
     }
   }
+}
+
+int heap_greater(HNode *a, HNode *b)
+{
+  int a_int = (int) a->key * 1000;
+  int b_int = (int) b->key * 1000;
+
+  if(a_int == b_int)
+    return a->val->id > b->val->id;
+  else
+    return a_int > b_int;
+}
+
+int heap_less(HNode *a, HNode *b)
+{
+  int a_int = (int) a->key * 1000;
+  int b_int = (int) b->key * 1000;
+
+  if(a_int == b_int)
+    return a->val->id < b->val->id;
+  else
+    return a_int < b_int;
 }
 
 void heap_free(Heap *H)
