@@ -1,226 +1,255 @@
 #include<stdio.h>
 #include<stdlib.h>
-#include<math.h>
 
+/* hash.h */
+typedef struct hash {
+  struct hash_record **arr;
+  int size;
+} Hash;
+
+typedef struct hash_record {
+  int id;
+  struct topic *val;
+  struct hash_record *next;
+} HashRecord;
+
+Hash *new_hashmap();
+void hash_insert(Hash *H, int key, struct topic *val);
+void hash_lookup(Hash *H, int key, struct topic **val);
+int hash_key(Hash *H, int id);
+struct topic **hash_to_a(Hash *H);
+void hash_free(Hash *H);
+
+/* kdtree.h */
+typedef struct kd_tree {
+  struct topic *val;
+  double x;
+  double y;
+  struct kd_tree *lchild;
+  struct kd_tree *rchild;
+} KDTree;
+
+KDTree *kdtree(struct topic **topics, int depth, int size);
+int compare_topics_x(const void *a, const void *b);
+int compare_topics_y(const void *a, const void *b);
+void kdtree_free(KDTree *T);
+
+/* nearby.h */
 #define MAX_TOPICS 10000
 #define MAX_QUESTIONS 1000
+#define MAX_QUERIES 10000
 
-struct point {
-  double lat;
-  double lng;
-};
-
-struct topic {
+typedef struct topic {
   int id;
-  struct point location;
-};
+  double x;
+  double y;
+  struct question *question;
+} Topic;
 
-typedef struct TreeNode {
-  int topic_id;
-  struct point location;
-  struct TreeNode *left;
-  struct TreeNode *right;
-} TreeNode;
+typedef struct question {
+  int id;
+  struct question *next;
+} Question;
 
-typedef struct ResultNode {
-  int topic_id;
-  double distance;
-} ResultNode;
+void print_nearest_topics(KDTree *T, double x, double y, int n_results);
+void print_nearest_questions(KDTree *T, double x, double y, int n_results);
 
-TreeNode* kd_tree(struct topic topics[], int n_topics, int depth);
-int nearest_neighbors(TreeNode* node, struct point search, int depth, ResultNode *results);
-int square_distance(struct point a, struct point b);
-int compare_nodes(const void *a, const void *b);
-int compare_topics_lat(const void *a, const void *b);
-int compare_topics_lng(const void *a, const void *b);
-
-int main()
+/* nearby.c */
+int main(int argc, char *argv[])
 {
-  int n_topics, n_questions, n_queries, n_question_topics;
+  char *line = NULL;
+  size_t len;
+  int i;
+  int n_topics, n_questions, n_queries;
   int topic_id, question_id;
-  char query_type;
+  int read;
+  double x, y;
   int n_results;
-  int n_found;
-  int i,j;
-  struct topic topics[MAX_TOPICS];
-  struct point point;
-  TreeNode *kdt;
-  TreeNode *found;
-  ResultNode *results;
+  char query;
+  int offset = 0;
+  Topic *topic;
+  Question *next;
+  Hash *H = new_hashmap();
+  KDTree *T;
 
-  scanf("%d %d %d\n", &n_topics, &n_questions, &n_queries);
-  printf("%d topics, %d questions, %d queries\n", n_topics, n_questions, n_queries);
+  /* Read number of topics, questions, and queries */
+  getline(&line, &len, stdin);
+  sscanf(line, "%d %d %d", &n_topics, &n_questions, &n_queries);
 
+  /* Load topics and insert into hash */
   for(i=0; i<n_topics; i++) {
-    scanf("%d %lf %lf\n", &topic_id, &point.lat, &point.lng);
-    topics[i].id = topic_id;
-    topics[i].location = point;
+    getline(&line, &len, stdin);
+    topic = malloc(sizeof(Topic));
+    sscanf(line, "%d %lf %lf", &topic->id, &topic->x, &topic->y);
+    hash_insert(H, topic->id, topic);
   }
 
-  kdt = kd_tree(topics, n_topics, 0);
+  /* Build kdtree */
+  T = kdtree(hash_to_a(H), 0, n_topics);
 
+  /* Load questions and append to topic linked lists */
   for(i=0; i<n_questions; i++) {
-    scanf("%d %d", &question_id, &n_question_topics);
+    getline(&line, &len, stdin);
+    sscanf(line, "%d", &question_id);
 
-    for(j=0; j<n_question_topics; j++) {
-      scanf("%d", &topic_id);
+    while(sscanf(line+offset, "%d%n", &topic_id, &read) == 1) {
+      offset += read;
+
+      hash_lookup(H, topic_id, &topic);
+
+      next = topic->question;
+      while(next != NULL) next = next->next;
+
+      next = malloc(sizeof(Question));
+      next->id = question_id;
+      next->next = NULL;
     }
-
-    scanf("\n");
   }
 
+  /* Run queries */
   for(i=0; i<n_queries; i++) {
-    scanf("%1c %d %lf %lf\n", &query_type, &n_results, &point.lat, &point.lng);
+    getline(&line, &len, stdin);
+    sscanf(line, "%c %d %lf %lf", &query, &n_results, &x, &y);
 
-    if(query_type == 't') {
-      n_found = nearest_neighbors(kdt, point, 0, &results);
-      qsort(results, n_found, sizeof(TreeNode), compare_nodes);
-
-      for(j=0; j < n_found; j++) {
-        printf("%d", results[j].topic_id);
-        if(n_found - 1 > j) printf(" ");
-      }
-
-      printf("\n");
+    if(query == 't') {
+      print_nearest_topics(T, x, y, n_results);
+    }
+    else {
+      print_nearest_questions(T, x, y, n_results);
     }
   }
+
+  hash_free(H);
+  kdtree_free(T);
 }
 
-TreeNode* kd_tree(struct topic topics[], int n_topics, int depth)
+void print_nearest_topics(KDTree *T, double x, double y, int n_results)
 {
-  int i;
+}
+
+void print_nearest_questions(KDTree *T, double x, double y, int n_results)
+{
+}
+
+/* kdtree.c */
+KDTree *kdtree(Topic **topics, int depth, int size)
+{
+  if(size == 0) return NULL;
+
   int median;
-  TreeNode *node;
+  int axis = depth % 2;
+  KDTree *node = malloc(sizeof(KDTree));
 
-  if(n_topics == 0) {
-    return NULL;
-  }
-
-  node = malloc(sizeof(TreeNode));
-
-  if(depth % 2 == 0)
-    qsort(topics, n_topics, sizeof(struct topic), compare_topics_lat);
+  if(depth == 0)
+    qsort(topics, size, sizeof(Topic *), compare_topics_x);
   else
-    qsort(topics, n_topics, sizeof(struct topic), compare_topics_lng);
+    qsort(topics, size, sizeof(Topic *), compare_topics_y);
 
-  median = n_topics/2;
+  median = size / 2;
 
-  node->topic_id = topics[median].id;
-  node->location = topics[median].location;
-  node->left = kd_tree(topics, median, depth+1);
-  node->right = kd_tree(topics+(median+1), n_topics-(median+1), depth+1);
+  node->val = topics[median];
+  node->lchild = kdtree(topics, depth+1, median);
+  node->rchild = kdtree(topics+median+1, depth+1, size-(median+1));
 
   return node;
 }
 
-int nearest_neighbors(TreeNode* node, struct point search, int depth, ResultNode *results)
+int compare_topics_x(const void *a, const void *b)
 {
-  TreeNode* best;
-  TreeNode* other_best;
-  int distance;
+  const struct topic *topic_a = a;
+  const struct topic *topic_b = b;
+  return topic_a->x - topic_b->x;
+}
 
-  if(node->left == NULL || node->right == NULL)
-    return 0;
+int compare_topics_y(const void *a, const void *b)
+{
+  const struct topic *topic_a = a;
+  const struct topic *topic_b = b;
+  return topic_a->y - topic_b->y;
+}
 
-  if(depth % 2 == 0) { /* by latitude */
-    if(search.lat < node->location.lat) {
-      best = nearest_neighbors(node->left, search, depth+1, results);
-      distance = square_distance(best->location, search);
+void kdtree_free(KDTree *T)
+{
+  free(T);
+}
 
-      /* If there's a possibility that the other side contains a closer point,
-       * search it as well */
-      if(distance > abs(search.lat - node->location.lat)) {
-        other_best = nearest_neighbors(node->right, search, depth+1, results);
-        if(square_distance(other_best->location, search) < distance)
-          best = other_best;
+/* hash.c */
+Hash *new_hashmap()
+{
+  int initial_size = MAX_TOPICS*2;
+  Hash *H = malloc(sizeof(Hash));
+  H->arr = malloc(initial_size * sizeof(HashRecord *));
+  H->size = initial_size;
+  return H;
+}
+
+void hash_insert(Hash *H, int id, Topic *val)
+{
+  int key = hash_key(H, id);
+  HashRecord *next;
+
+  if(H->arr[key] == NULL) {
+    H->arr[key] = (HashRecord *)malloc(sizeof(HashRecord *));
+    H->arr[key]->id = id;
+    H->arr[key]->val = val;
+    H->arr[key]->next = NULL;
+  }
+  else {
+    next = H->arr[key];
+    while(next->next != NULL) next = next->next;
+
+    next->next = (HashRecord *)malloc(sizeof(HashRecord *));
+    next->next->id = id;
+    next->next->val = val;
+    next->next->next = NULL;
+  }
+}
+
+void hash_lookup(Hash *H, int id, Topic **val)
+{
+  int key = hash_key(H, id);
+  HashRecord *next;
+
+  *val = NULL;
+
+  if(H->arr[key] != NULL) {
+    next = H->arr[key];
+
+    while(next != NULL) {
+      if(next->id == id) {
+        *val = next->val;
+        break;
       }
 
-      return best;
-    } else {
-      best = nearest_neighbors(node->right, search, depth+1, results);
-      distance = square_distance(best->location, search);
-
-      /* If there's a possibility that the other side contains a closer location,
-       * search it as well */
-      if(distance > abs(search.lat - node->location.lat)) {
-        other_best = nearest_neighbors(node->left, search, depth+1, results);
-        if(square_distance(other_best->location, search) < distance)
-          best = other_best;
-      }
-
-      return best;
-    }
-  } else { /* by longitude */
-    if(search.lng < node->location.lng) {
-      best = nearest_neighbors(node->left, search, depth+1, results);
-      distance = square_distance(best->location, search);
-
-      /* If there's a possibility that the other side contains a closer location,
-       * search it as well */
-      if(distance > pow((double)abs(search.lng - node->location.lng), 2)) {
-        other_best = nearest_neighbors(node->right, search, depth+1, results);
-        if(square_distance(other_best->location, search) < distance)
-          best = other_best;
-      }
-
-      return best;
-    } else {
-      best = nearest_neighbors(node->right, search, depth+1, results);
-      distance = square_distance(best->location, search);
-
-      /* If there's a possibility that the other side contains a closer location,
-       * search it as well */
-      if(distance > pow((double)abs(search.lng - node->location.lng), 2)) {
-        other_best = nearest_neighbors(node->left, search, depth+1, results);
-        if(square_distance(other_best->location, search) < distance)
-          best = other_best;
-      }
-
-      return best;
+      next = next->next;
     }
   }
 }
 
-int square_distance(struct point a, struct point b)
+Topic **hash_to_a(Hash *H)
 {
-  return pow((double)abs(a.lat - b.lat), 2) + pow((double)abs(a.lng - b.lng), 2);
+  Topic **ar = malloc(H->size * sizeof(Topic *));
+  int i;
+  int j=0;
+
+  for(i=0; i<H->size; i++) {
+    if(H->arr[i] != NULL) {
+      ar[j] = (Topic *)malloc(sizeof(Topic *));
+      ar[j] = H->arr[i]->val;
+      j++;
+    }
+  }
+
+  return ar;
 }
 
-int compare_nodes(const void *a, const void *b)
+int hash_key(Hash *H, int id)
 {
-  const ResultNode *res_a = a;
-  const ResultNode *res_b = b;
-
-  if(res_a->distance < res_b->distance)
-    return -1;
-  else if(res_a->distance > res_b->distance)
-    return 1;
-  else
-    return res_a->topic_id - res_b->topic_id;
+  return id % H->size;
 }
 
-int compare_topics_lat(const void *a, const void *b)
+void hash_free(Hash *H)
 {
-  const struct topic *topic_a = a;
-  const struct topic *topic_b = b;
-
-  if(topic_a->location.lat < topic_b->location.lat)
-    return -1;
-  else if(topic_a->location.lat > topic_b->location.lat)
-    return 1;
-  else
-    return 0;
-}
-
-int compare_topics_lng(const void *a, const void *b)
-{
-  const struct topic *topic_a = a;
-  const struct topic *topic_b = b;
-
-  if(topic_a->location.lng < topic_b->location.lng)
-    return -1;
-  else if(topic_a->location.lng > topic_b->location.lng)
-    return 1;
-  else
-    return 0;
+  free(H->arr);
+  free(H);
 }
