@@ -38,7 +38,9 @@ typedef struct heap {
 
 Heap* new_heap();
 void heap_insert(Heap *H, double key, struct topic *val);
-void extract_max(Heap *H, double *key, struct topic **val);
+void extract_min(Heap *H, double *key, struct topic **val);
+int heap_index_of(Heap *H, struct topic *val);
+void heap_decrease_key(Heap* H, int index, double key);
 void heap_bubble_up(Heap *H, int pos);
 void heap_bubble_down(Heap *H, int pos);
 void heap_free(Heap *H);
@@ -57,7 +59,7 @@ typedef struct kd_tree {
 
 KDTree *kdtree(struct topic **topics, int depth, int size);
 void kdtree_nearest(struct kd_tree *T, double x, double y, int n, int depth,
-    struct heap *topics);
+    int no_dupes, struct heap *topics, double cur_max);
 int compare_topics_x(const void *a, const void *b);
 int compare_topics_y(const void *a, const void *b);
 void kdtree_free(KDTree *T);
@@ -66,6 +68,7 @@ void kdtree_free(KDTree *T);
 #define MAX_TOPICS 10000
 #define MAX_QUESTIONS 1000
 #define MAX_QUERIES 10000
+#define PLANE_SIZE 1000000
 
 typedef struct topic {
   int id;
@@ -153,36 +156,59 @@ int main(int argc, char *argv[])
 
 void print_nearest_topics(KDTree *T, double x, double y, int n_results)
 {
-  Heap *topics = new_heap();
-  int i, size = 0;
-  double dist;
   Topic *topic;
-  Topic **sorted;
+  Heap *topics = new_heap();
+  int i;
+  double dist;
 
-  kdtree_nearest(T, x, y, n_results, 0, topics);
-  size = topics->size;
+  kdtree_nearest(T, x, y, n_results, 0, 0, topics, PLANE_SIZE);
 
-  sorted = malloc(size * sizeof(Topic *));
+  if(topics->size < n_results)
+    n_results = topics->size;
 
-  /* Reverse the order of the heap */
-  for(i=size-1; i>=0; i--) {
-    extract_max(topics, &dist, &topic);
-    sorted[i] = topic;
+  /* Print the first n_results entries in the heap */
+  for(i=0; i < n_results; i++) {
+    extract_min(topics, &dist, &topic);
+    printf("%d", topic->id);
+    if(i < n_results-1) printf(" ");
   }
-
-  /* Print the array */
-  for(i=0; i<size; i++) {
-    printf("%d", sorted[i]->id);
-    if(i < size-1) printf(" ");
-  }
-
-  printf("\n");
 
   heap_free(topics);
 }
 
 void print_nearest_questions(KDTree *T, double x, double y, int n_results)
 {
+  Topic *topic;
+  Heap *topics = new_heap();
+  int i;
+  double dist;
+  double cur_dist = 0;
+
+  kdtree_nearest(T, x, y, n_results, 0, 0, topics, PLANE_SIZE);
+
+  if(topics->size < n_results)
+    n_results = topics->size;
+
+  /* Print the first n_results entries in the heap */
+  do {
+    extract_min(topics, &dist, &topic);
+
+    if(dist != cur_dist) {
+      // dedupe array
+      // sort array largest to smallest
+    }
+
+    // append questions from topic to array
+    // increase size by number of questions in topic
+  } while (size < n_results);
+
+  for(i=0; i < n_results; i++) {
+    extract_min(topics, &dist, &topic);
+    printf("%d", topic->id);
+    if(i < n_results-1) printf(" ");
+  }
+
+  heap_free(topics);
 }
 
 /* kdtree.c */
@@ -237,16 +263,17 @@ int compare_topics_y(const void *a, const void *b)
 }
 
 void kdtree_nearest(KDTree *T, double x, double y, int n, int depth,
-    Heap *topics)
+    int no_dupes, Heap *topics, double cur_max)
 {
   if(T == NULL)
     return;
 
-  double d, cur_max;
+  double d;
   double a, b;
   Topic *topic;
   int axis = depth % 2;
   double dist = pow(T->x - x, 2) + pow(T->y - y, 2);
+  int existing;
 
   if(axis == 0) {
     a = x; b = T->x;
@@ -257,32 +284,36 @@ void kdtree_nearest(KDTree *T, double x, double y, int n, int depth,
 
   /* Follow tree down in appropriate direction */
   if(a <= b)
-    kdtree_nearest(T->lchild, x, y, n, depth+1, topics);
+    kdtree_nearest(T->lchild, x, y, n, depth+1, no_dupes, topics, cur_max);
   else
-    kdtree_nearest(T->rchild, x, y, n, depth+1, topics);
+    kdtree_nearest(T->rchild, x, y, n, depth+1, no_dupes, topics, cur_max);
 
   /* Add or swap out a value in the heap, if necessary */
-  if(topics->size < n) {
-    heap_insert(topics, dist, T->val);
-  }
-  else {
-    extract_max(topics, &cur_max, &topic);
-
-    if(dist < cur_max) {
-      heap_insert(topics, dist, T->val);
+  if(topics->size < n || dist < cur_max) {
+    if(dist > cur_max)
       cur_max = dist;
+
+    if(no_dupes) {
+      existing = heap_index_of(topics, T->val);
+
+      if(existing != -1) {
+        heap_decrease_key(topics, existing, dist);
+      }
+      else {
+        heap_insert(topics, dist, T->val);
+      }
     }
     else {
-      heap_insert(topics, cur_max, topic);
+      heap_insert(topics, dist, T->val);
     }
   }
 
   /* If there might be a point closer than our current max on the other side */
   if(topics->size < n || pow(a-b, 2) < cur_max) {
     if(a <= b)
-      kdtree_nearest(T->rchild, x, y, n, depth+1, topics);
+      kdtree_nearest(T->rchild, x, y, n, depth+1, no_dupes, topics, cur_max);
     else
-      kdtree_nearest(T->lchild, x, y, n, depth+1, topics);
+      kdtree_nearest(T->lchild, x, y, n, depth+1, no_dupes, topics, cur_max);
   }
 }
 
@@ -392,17 +423,17 @@ void heap_insert(Heap *H, double key, Topic *val)
   grow_heap(H);
 
   H->arr[pos] = malloc(sizeof(HNode));
-  H->arr[pos]->key = 0-key;
+  H->arr[pos]->key = key;
   H->arr[pos]->val = val;
   H->size++;
 
   heap_bubble_up(H, pos);
 }
 
-void extract_max(Heap *H, double *key, Topic **val)
+void extract_min(Heap *H, double *key, Topic **val)
 {
   if(H->size > 0) {
-    *key = 0-H->arr[0]->key;
+    *key = H->arr[0]->key;
     *val = H->arr[0]->val;
 
     H->arr[0] = H->arr[H->size-1];
@@ -414,6 +445,28 @@ void extract_max(Heap *H, double *key, Topic **val)
   else {
     fputs("Heap empty; can't extract min\n", stderr);
     return;
+  }
+}
+
+int heap_index_of(Heap *H, Topic *val)
+{
+  int i;
+  int index = -1;
+  for(i=0; i < H->size; i++) {
+    if(H->arr[i]->val == val) {
+      index = i;
+      break;
+    }
+  }
+
+  return index;
+}
+
+void heap_decrease_key(Heap* H, int index, double key)
+{
+  if(key < H->arr[index]->key) {
+    H->arr[index]->key = key;
+    heap_bubble_up(H, index);
   }
 }
 
@@ -490,24 +543,32 @@ void heap_bubble_down(Heap *H, int pos)
 
 int heap_greater(HNode *a, HNode *b)
 {
-  int a_int = (int) a->key * 1000;
-  int b_int = (int) b->key * 1000;
+  int a_int = (int)(a->key * 1000);
+  int b_int = (int)(b->key * 1000);
 
-  if(a_int == b_int)
-    return a->val->id > b->val->id;
-  else
+  if(a_int == b_int) {
+    /* note that the comparison is flipped here, because larger ids are
+     * actually "lower" (considered closer) with distance comparisons */
+    return a->val->id < b->val->id;
+  }
+  else {
     return a_int > b_int;
+  }
 }
 
 int heap_less(HNode *a, HNode *b)
 {
-  int a_int = (int) a->key * 1000;
-  int b_int = (int) b->key * 1000;
+  int a_int = (int)(a->key * 1000);
+  int b_int = (int)(b->key * 1000);
 
-  if(a_int == b_int)
-    return a->val->id < b->val->id;
-  else
+  if(a_int == b_int) {
+    /* note that the comparison is flipped here, because larger ids are
+     * actually "lower" (considered closer) with distance comparisons */
+    return a->val->id > b->val->id;
+  }
+  else {
     return a_int < b_int;
+  }
 }
 
 void heap_free(Heap *H)
