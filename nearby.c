@@ -16,7 +16,8 @@ typedef struct hash_record {
 
 Hash *new_hashmap();
 void hash_insert(Hash *H, int key, struct topic *val);
-void hash_lookup(Hash *H, int key, struct topic **val);
+int hash_lookup(Hash *H, int key, struct topic **val);
+int hash_contains(Hash *H, int id);
 int hash_key(Hash *H, int id);
 struct topic **hash_to_a(Hash *H);
 void hash_free(Hash *H);
@@ -38,7 +39,7 @@ typedef struct heap {
 
 Heap* new_heap();
 void heap_insert(Heap *H, double key, struct topic *val);
-void extract_min(Heap *H, double *key, struct topic **val);
+int extract_min(Heap *H, double *key, struct topic **val);
 int heap_index_of(Heap *H, struct topic *val);
 void heap_decrease_key(Heap* H, int index, double key);
 void heap_bubble_up(Heap *H, int pos);
@@ -59,7 +60,7 @@ typedef struct kd_tree {
 
 KDTree *kdtree(struct topic **topics, int depth, int size);
 void kdtree_nearest(struct kd_tree *T, double x, double y, int n, int depth,
-    int no_dupes, struct heap *topics, double cur_max);
+    struct heap *topics, double cur_max);
 int compare_topics_x(const void *a, const void *b);
 int compare_topics_y(const void *a, const void *b);
 void kdtree_free(KDTree *T);
@@ -84,6 +85,7 @@ typedef struct question {
 
 void print_nearest_topics(KDTree *T, double x, double y, int n_results);
 void print_nearest_questions(KDTree *T, double x, double y, int n_results);
+int compare_question_ids(const void *a, const void *b);
 
 /* nearby.c */
 int main(int argc, char *argv[])
@@ -91,7 +93,7 @@ int main(int argc, char *argv[])
   char *line = NULL;
   size_t len;
   int i;
-  int n_topics, n_questions, n_queries;
+  int n_topics, n_questions, n_topic_questions, n_queries;
   int topic_id, question_id;
   int read;
   double x, y;
@@ -121,19 +123,29 @@ int main(int argc, char *argv[])
   /* Load questions and append to topic linked lists */
   for(i=0; i<n_questions; i++) {
     getline(&line, &len, stdin);
-    sscanf(line, "%d", &question_id);
+    sscanf(line, "%d %d%n", &question_id, &n_topic_questions, &offset);
 
     while(sscanf(line+offset, "%d%n", &topic_id, &read) == 1) {
       offset += read;
 
       hash_lookup(H, topic_id, &topic);
 
-      next = topic->question;
-      while(next != NULL) next = next->next;
-
-      next = malloc(sizeof(Question));
-      next->id = question_id;
-      next->next = NULL;
+      if(topic != NULL) {
+        /* Add question to linked list */
+        if(topic->question == NULL) {
+          topic->question = malloc(sizeof(Question));
+          topic->question->id = question_id;
+          topic->question->next = NULL;
+        }
+        else {
+          next = topic->question;
+          while(next->next != NULL) next = next->next;
+          next->next = malloc(sizeof(Question));
+          next = next->next;
+          next->id = question_id;
+          next->next = NULL;
+        }
+      }
     }
   }
 
@@ -161,7 +173,7 @@ void print_nearest_topics(KDTree *T, double x, double y, int n_results)
   int i;
   double dist;
 
-  kdtree_nearest(T, x, y, n_results, 0, 0, topics, PLANE_SIZE);
+  kdtree_nearest(T, x, y, n_results, 0, topics, PLANE_SIZE);
 
   if(topics->size < n_results)
     n_results = topics->size;
@@ -172,6 +184,7 @@ void print_nearest_topics(KDTree *T, double x, double y, int n_results)
     printf("%d", topic->id);
     if(i < n_results-1) printf(" ");
   }
+  printf("\n");
 
   heap_free(topics);
 }
@@ -180,35 +193,57 @@ void print_nearest_questions(KDTree *T, double x, double y, int n_results)
 {
   Topic *topic;
   Heap *topics = new_heap();
-  int i;
+  Question **questions = malloc(2 * n_results * sizeof(Question *));
+  Question *next;
+  int i = 0;
+  int found = 0;
+  int last_step = 0;
   double dist;
   double cur_dist = 0;
+  Hash *H = new_hashmap();
 
-  kdtree_nearest(T, x, y, n_results, 0, 0, topics, PLANE_SIZE);
+  kdtree_nearest(T, x, y, n_results*2, 0, topics, PLANE_SIZE);
 
-  if(topics->size < n_results)
-    n_results = topics->size;
+  if(topics->size > 0) {
+    while(extract_min(topics, &dist, &topic) == 1) {
+      if(dist > cur_dist && found > 0) {
+        qsort(questions+last_step, found-last_step, sizeof(Question *), compare_question_ids);
 
-  /* Print the first n_results entries in the heap */
-  do {
-    extract_min(topics, &dist, &topic);
+        /* once we're finished with all topics at a given distance, we're done
+         * if we've found enough questions */
+        if(found >= n_results)
+          break;
 
-    if(dist != cur_dist) {
-      // dedupe array
-      // sort array largest to smallest
+        last_step += found;
+        cur_dist = dist;
+      }
+
+      /* add all questions to the array that haven't already been seen */
+      for(next = topic->question; next != NULL; next = next->next) {
+        if(!hash_contains(H, next->id)) {
+          questions[found] = next;
+          hash_insert(H, next->id, topic);
+          found++;
+        }
+      }
     }
 
-    // append questions from topic to array
-    // increase size by number of questions in topic
-  } while (size < n_results);
-
-  for(i=0; i < n_results; i++) {
-    extract_min(topics, &dist, &topic);
-    printf("%d", topic->id);
-    if(i < n_results-1) printf(" ");
+    for(i=0; i < found; i++) {
+      printf("%d", questions[i]->id);
+      if(i < found-1) printf(" ");
+    }
   }
 
   heap_free(topics);
+  free(questions);
+  hash_free(H);
+}
+
+int compare_question_ids(const void *a, const void *b)
+{
+  const struct question *question_a = (*(Question **)a);
+  const struct question *question_b = (*(Question **)b);
+  return question_b->id - question_a->id;
 }
 
 /* kdtree.c */
@@ -263,7 +298,7 @@ int compare_topics_y(const void *a, const void *b)
 }
 
 void kdtree_nearest(KDTree *T, double x, double y, int n, int depth,
-    int no_dupes, Heap *topics, double cur_max)
+    Heap *topics, double cur_max)
 {
   if(T == NULL)
     return;
@@ -284,36 +319,24 @@ void kdtree_nearest(KDTree *T, double x, double y, int n, int depth,
 
   /* Follow tree down in appropriate direction */
   if(a <= b)
-    kdtree_nearest(T->lchild, x, y, n, depth+1, no_dupes, topics, cur_max);
+    kdtree_nearest(T->lchild, x, y, n, depth+1, topics, cur_max);
   else
-    kdtree_nearest(T->rchild, x, y, n, depth+1, no_dupes, topics, cur_max);
+    kdtree_nearest(T->rchild, x, y, n, depth+1, topics, cur_max);
 
   /* Add or swap out a value in the heap, if necessary */
   if(topics->size < n || dist < cur_max) {
     if(dist > cur_max)
       cur_max = dist;
 
-    if(no_dupes) {
-      existing = heap_index_of(topics, T->val);
-
-      if(existing != -1) {
-        heap_decrease_key(topics, existing, dist);
-      }
-      else {
-        heap_insert(topics, dist, T->val);
-      }
-    }
-    else {
-      heap_insert(topics, dist, T->val);
-    }
+    heap_insert(topics, dist, T->val);
   }
 
   /* If there might be a point closer than our current max on the other side */
   if(topics->size < n || pow(a-b, 2) < cur_max) {
     if(a <= b)
-      kdtree_nearest(T->rchild, x, y, n, depth+1, no_dupes, topics, cur_max);
+      kdtree_nearest(T->rchild, x, y, n, depth+1, topics, cur_max);
     else
-      kdtree_nearest(T->lchild, x, y, n, depth+1, no_dupes, topics, cur_max);
+      kdtree_nearest(T->lchild, x, y, n, depth+1, topics, cur_max);
   }
 }
 
@@ -354,7 +377,7 @@ void hash_insert(Hash *H, int id, Topic *val)
   }
 }
 
-void hash_lookup(Hash *H, int id, Topic **val)
+int hash_lookup(Hash *H, int id, Topic **val)
 {
   int key = hash_key(H, id);
   HashRecord *next;
@@ -373,6 +396,16 @@ void hash_lookup(Hash *H, int id, Topic **val)
       next = next->next;
     }
   }
+
+  return *val != NULL;
+}
+
+int hash_contains(Hash *H, int id)
+{
+  Topic *question;
+  int in_hash;
+  in_hash = hash_lookup(H, id, &question);
+  return in_hash;
 }
 
 Topic **hash_to_a(Hash *H)
@@ -430,7 +463,7 @@ void heap_insert(Heap *H, double key, Topic *val)
   heap_bubble_up(H, pos);
 }
 
-void extract_min(Heap *H, double *key, Topic **val)
+int extract_min(Heap *H, double *key, Topic **val)
 {
   if(H->size > 0) {
     *key = H->arr[0]->key;
@@ -440,11 +473,10 @@ void extract_min(Heap *H, double *key, Topic **val)
     H->size--;
     heap_bubble_down(H, 0);
 
-    return;
+    return 1;
   }
   else {
-    fputs("Heap empty; can't extract min\n", stderr);
-    return;
+    return 0;
   }
 }
 
